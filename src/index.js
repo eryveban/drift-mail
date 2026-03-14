@@ -116,8 +116,6 @@ async function initDatabase(env) {
     throw error;
   }
 }
-  }
-}
 
 // ============ 工具函数 ============
 
