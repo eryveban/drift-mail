@@ -1,21 +1,30 @@
-# DriftMail API
+# DriftMail
 
-临时邮箱后端服务，基于 Cloudflare Workers 部署。
+临时邮箱服务，包含后端 API 和 Web 前端界面。
 
 ## 技术栈
 
+**后端**
 - Cloudflare Workers
 - Cloudflare D1 (SQLite)
 - Cloudflare KV
 - JWT 认证
 
+**前端**
+- Vue 3
+- Vite
+- Tailwind CSS
+- Pinia
+
 ## 功能特性
 
 - 自定义邮箱用户名
-- 多域名支持
+- 多域名选择
+- 邮件实时刷新
+- 附件下载
+- 邮箱有效期延长
+- Web 管理界面
 - 邮件接收与存储
-- 附件支持
-- 邮箱有效期管理
 - 定时清理过期邮箱
 
 ## 部署
@@ -52,7 +61,7 @@
 
 | 变量名 | 必需 | 说明 |
 |--------|------|------|
-| `ACCESS_KEY` | ✅ | API 访问密钥，用于验证前端请求 |
+| `ACCESS_KEY` | ✅ | API 访问密钥，用于验证请求 |
 | `MAIL_DOMAINS` | ✅ | 邮件域名，多个用逗号分隔，如 `mail1.com,mail2.com` |
 | `EXPIRE_MINUTES` | ❌ | 邮箱默认过期时间，默认 30 分钟 |
 
@@ -72,6 +81,26 @@
 - 创建数据库表
 - 同步域名配置
 - 生成 JWT 密钥
+
+## 本地开发
+
+```bash
+# 安装依赖
+npm install
+
+# 启动开发服务器
+npm run dev
+
+# 构建
+npm run build
+
+# 部署
+npm run deploy
+```
+
+## 浏览器扩展
+
+配合 [DriftMail Extension](https://github.com/eryveban/drift-mail-extension) 使用更便捷。
 
 ## API 文档
 
