@@ -373,28 +373,33 @@ function verifyAccessKey(request, env) {
 
 async function syncDomains(env) {
   if (!env.MAIL_DOMAINS) return;
+  if (!env.DB) return;
 
   const domains = env.MAIL_DOMAINS.split(',').map(d => d.trim()).filter(Boolean);
   if (domains.length === 0) return;
 
-  // 获取现有域名
-  const { results: existing } = await env.DB.prepare('SELECT domain FROM domains').all();
-  const existingDomains = new Set(existing.map(d => d.domain));
+  try {
+    // 获取现有域名
+    const { results: existing } = await env.DB.prepare('SELECT domain FROM domains').all();
+    const existingDomains = new Set(existing.map(d => d.domain));
 
-  // 删除不在环境变量中的域名
-  for (const d of existing) {
-    if (!domains.includes(d.domain)) {
-      await env.DB.prepare('DELETE FROM domains WHERE domain = ?').bind(d.domain).run();
+    // 删除不在环境变量中的域名
+    for (const d of existing) {
+      if (!domains.includes(d.domain)) {
+        await env.DB.prepare('DELETE FROM domains WHERE domain = ?').bind(d.domain).run();
+      }
     }
-  }
 
-  // 添加新域名
-  for (const domain of domains) {
-    if (!existingDomains.has(domain)) {
-      await env.DB.prepare(
-        'INSERT INTO domains (id, domain, is_verified, created_at) VALUES (?, ?, 1, datetime("now"))'
-      ).bind(generateId(), domain).run();
+    // 添加新域名（使用 INSERT OR IGNORE 避免重复）
+    for (const domain of domains) {
+      if (!existingDomains.has(domain)) {
+        await env.DB.prepare(
+          'INSERT OR IGNORE INTO domains (id, domain, is_verified, created_at) VALUES (?, ?, 1, datetime("now"))'
+        ).bind(generateId(), domain).run();
+      }
     }
+  } catch (error) {
+    console.error('syncDomains error:', error);
   }
 }
 
@@ -1147,7 +1152,14 @@ async function handleRequest(request, env) {
 
   // 静态文件（前端）
   if (!path.startsWith('/api/')) {
-    return env.ASSETS.fetch(request);
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+    // ASSETS 未绑定时返回 index.html
+    return new Response('Frontend not available. Please bind ASSETS in wrangler.toml', {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' }
+    });
   }
 
   return error('Not Found', 404);
