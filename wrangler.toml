@@ -2,18 +2,13 @@ name = "drift-mail"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "drift-mail-db"
-database_id = "your-database-id"
-
-[[kv_namespaces]]
-binding = "MAIL_KV"
-id = "your-kv-id"
-
 [assets]
 directory = "public"
 binding = "ASSETS"
 
 [triggers]
 crons = ["*/5 * * * *"]
+
+# 在 Cloudflare Dashboard → Workers → Settings → Bindings 中绑定：
+# - D1 数据库：变量名 DB
+# - KV 命名空间：变量名 MAIL_KV
