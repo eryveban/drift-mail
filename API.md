@@ -1,6 +1,6 @@
 # DriftMail API 文档
 
-临时邮箱服务 API，兼容 DuckMail 格式。
+DriftMail临时邮箱服务 API。
 
 ## 基础信息
 
