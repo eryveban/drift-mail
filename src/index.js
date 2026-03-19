@@ -5,6 +5,72 @@
 
 import { SignJWT, jwtVerify } from './jwt.js';
 
+const SCHEMA_TABLES = [
+  `CREATE TABLE IF NOT EXISTS domains (
+    id TEXT PRIMARY KEY,
+    domain TEXT UNIQUE NOT NULL,
+    is_verified INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    address TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    token TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    msgid TEXT,
+    account_id TEXT NOT NULL,
+    from_name TEXT,
+    from_address TEXT,
+    to_address TEXT,
+    subject TEXT,
+    text TEXT,
+    html TEXT,
+    seen INTEGER DEFAULT 0,
+    has_attachments INTEGER DEFAULT 0,
+    size INTEGER DEFAULT 0,
+    raw_source TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    filename TEXT,
+    content_type TEXT,
+    size INTEGER,
+    content TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+  )`,
+];
+
+const SCHEMA_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS idx_accounts_expires_at ON accounts(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_accounts_address ON accounts(address)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_account_id ON messages(account_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)`,
+];
+
+const REQUIRED_SCHEMA_OBJECTS = [
+  'domains',
+  'accounts',
+  'messages',
+  'attachments',
+  'idx_accounts_expires_at',
+  'idx_accounts_address',
+  'idx_messages_account_id',
+  'idx_messages_created_at',
+];
+
+const schemaReadyByDb = new WeakMap();
+
 // ============ JWT Secret 管理 ============
 
 async function getJwtSecret(env) {
@@ -118,6 +184,50 @@ async function initDatabase(env) {
 }
 
 // ============ 工具函数 ============
+
+async function ensureDatabaseSchema(env) {
+  if (!env.DB) {
+    throw new Error('DB not bound. Please configure the D1 binding named DB.');
+  }
+
+  const cached = schemaReadyByDb.get(env.DB);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const placeholders = REQUIRED_SCHEMA_OBJECTS.map(() => '?').join(', ');
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM sqlite_schema WHERE name IN (${placeholders})`
+    ).bind(...REQUIRED_SCHEMA_OBJECTS).all();
+
+    const existingObjects = new Set(results.map((row) => row.name));
+    const schemaReady = REQUIRED_SCHEMA_OBJECTS.every((name) => existingObjects.has(name));
+    if (schemaReady) {
+      return;
+    }
+
+    console.log('Ensuring database schema...');
+
+    for (const sql of SCHEMA_TABLES) {
+      await env.DB.prepare(sql).run();
+    }
+
+    for (const sql of SCHEMA_INDEXES) {
+      await env.DB.prepare(sql).run();
+    }
+  })();
+
+  schemaReadyByDb.set(env.DB, pending);
+
+  try {
+    await pending;
+  } catch (error) {
+    schemaReadyByDb.delete(env.DB);
+    console.error('Database schema ensure failed:', error);
+    throw error;
+  }
+}
 
 function generateId() {
   return crypto.randomUUID();
@@ -1170,16 +1280,18 @@ async function handleRequest(request, env) {
 export default {
   async fetch(request, env, ctx) {
     // 自动初始化数据库
-    await initDatabase(env);
+    await ensureDatabaseSchema(env);
     return handleRequest(request, env);
   },
 
   async scheduled(event, env, ctx) {
+    await ensureDatabaseSchema(env);
     await cleanupExpired(env);
   },
 
   // Email 接收处理
   async email(message, env, ctx) {
+    await ensureDatabaseSchema(env);
     const to = message.to;
     const [username, domain] = to.split('@');
 

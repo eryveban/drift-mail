@@ -1,0 +1,29 @@
+{
+  "name": "drift-mail",
+  "main": "src/index.js",
+  "compatibility_date": "2024-01-01",
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "drift-mail-db",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "MAIL_KV"
+    }
+  ],
+  "vars": {
+    "ACCESS_KEY": "admin",
+    "MAIL_DOMAINS": "",
+    "EXPIRE_MINUTES": "30"
+  }
+}
