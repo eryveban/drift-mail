@@ -5,6 +5,72 @@
 
 import { SignJWT, jwtVerify } from './jwt.js';
 
+const SCHEMA_TABLES = [
+  `CREATE TABLE IF NOT EXISTS domains (
+    id TEXT PRIMARY KEY,
+    domain TEXT UNIQUE NOT NULL,
+    is_verified INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    address TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    token TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    msgid TEXT,
+    account_id TEXT NOT NULL,
+    from_name TEXT,
+    from_address TEXT,
+    to_address TEXT,
+    subject TEXT,
+    text TEXT,
+    html TEXT,
+    seen INTEGER DEFAULT 0,
+    has_attachments INTEGER DEFAULT 0,
+    size INTEGER DEFAULT 0,
+    raw_source TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    filename TEXT,
+    content_type TEXT,
+    size INTEGER,
+    content TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+  )`,
+];
+
+const SCHEMA_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS idx_accounts_expires_at ON accounts(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_accounts_address ON accounts(address)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_account_id ON messages(account_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)`,
+];
+
+const REQUIRED_SCHEMA_OBJECTS = [
+  'domains',
+  'accounts',
+  'messages',
+  'attachments',
+  'idx_accounts_expires_at',
+  'idx_accounts_address',
+  'idx_messages_account_id',
+  'idx_messages_created_at',
+];
+
+const schemaReadyByDb = new WeakMap();
+
 // ============ JWT Secret 管理 ============
 
 async function getJwtSecret(env) {
@@ -119,6 +185,50 @@ async function initDatabase(env) {
 
 // ============ 工具函数 ============
 
+async function ensureDatabaseSchema(env) {
+  if (!env.DB) {
+    throw new Error('DB not bound. Please configure the D1 binding named DB.');
+  }
+
+  const cached = schemaReadyByDb.get(env.DB);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const placeholders = REQUIRED_SCHEMA_OBJECTS.map(() => '?').join(', ');
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM sqlite_schema WHERE name IN (${placeholders})`
+    ).bind(...REQUIRED_SCHEMA_OBJECTS).all();
+
+    const existingObjects = new Set(results.map((row) => row.name));
+    const schemaReady = REQUIRED_SCHEMA_OBJECTS.every((name) => existingObjects.has(name));
+    if (schemaReady) {
+      return;
+    }
+
+    console.log('Ensuring database schema...');
+
+    for (const sql of SCHEMA_TABLES) {
+      await env.DB.prepare(sql).run();
+    }
+
+    for (const sql of SCHEMA_INDEXES) {
+      await env.DB.prepare(sql).run();
+    }
+  })();
+
+  schemaReadyByDb.set(env.DB, pending);
+
+  try {
+    await pending;
+  } catch (error) {
+    schemaReadyByDb.delete(env.DB);
+    console.error('Database schema ensure failed:', error);
+    throw error;
+  }
+}
+
 function generateId() {
   return crypto.randomUUID();
 }
@@ -138,6 +248,200 @@ function hashPassword(password) {
 }
 
 // 解码 Quoted-Printable（支持字符集）
+function normalizeCharset(charset = 'utf-8') {
+  const normalized = String(charset || 'utf-8')
+    .trim()
+    .replace(/^"(.*)"$/, '$1')
+    .toLowerCase();
+
+  if (!normalized || normalized === 'utf8') {
+    return 'utf-8';
+  }
+
+  if (['gb2312', 'gbk', 'gb18030', 'x-gbk', 'cp936', 'gb_2312-80'].includes(normalized)) {
+    return 'gb18030';
+  }
+
+  return normalized;
+}
+
+function bytesToByteString(bytes) {
+  let result = '';
+  const chunkSize = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    result += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+
+  return result;
+}
+
+function byteStringToBytes(value) {
+  const bytes = new Uint8Array(value.length);
+
+  for (let i = 0; i < value.length; i++) {
+    bytes[i] = value.charCodeAt(i) & 0xFF;
+  }
+
+  return bytes;
+}
+
+function decodeBytes(bytes, charset = 'utf-8') {
+  const normalized = normalizeCharset(charset);
+
+  try {
+    return new TextDecoder(normalized).decode(bytes);
+  } catch {
+    try {
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch {
+      return bytesToByteString(bytes);
+    }
+  }
+}
+
+function decodePercentEncodedBytes(value) {
+  const bytes = [];
+
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === '%' && /^[0-9A-F]{2}$/i.test(value.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(value.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      bytes.push(value.charCodeAt(i) & 0xFF);
+    }
+  }
+
+  return new Uint8Array(bytes);
+}
+
+function decodeEncodedWord(word) {
+  const match = word.match(/^=\?([^?]+)\?([bqBQ])\?([^?]*)\?=$/);
+  if (!match) {
+    return word;
+  }
+
+  const [, charset, encoding, encodedText] = match;
+
+  try {
+    if (encoding.toLowerCase() === 'b') {
+      return decodeBytes(byteStringToBytes(atob(encodedText)), charset);
+    }
+
+    const qDecoded = encodedText.replace(/_/g, ' ');
+    const bytes = [];
+
+    for (let i = 0; i < qDecoded.length; i++) {
+      if (qDecoded[i] === '=' && /^[0-9A-F]{2}$/i.test(qDecoded.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(qDecoded.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        bytes.push(qDecoded.charCodeAt(i) & 0xFF);
+      }
+    }
+
+    return decodeBytes(new Uint8Array(bytes), charset);
+  } catch {
+    return word;
+  }
+}
+
+function decodeHeaderValue(value) {
+  if (!value || !value.includes('=?')) {
+    return value || '';
+  }
+
+  const encodedWordPattern = /=\?[^?]+\?[bqBQ]\?[^?]*\?=/g;
+  let result = '';
+  let lastIndex = 0;
+  let previousWasEncodedWord = false;
+  let match;
+
+  while ((match = encodedWordPattern.exec(value)) !== null) {
+    const between = value.slice(lastIndex, match.index);
+
+    if (!(previousWasEncodedWord && /^[ \t\r\n]+$/.test(between))) {
+      result += between;
+    }
+
+    result += decodeEncodedWord(match[0]);
+    lastIndex = match.index + match[0].length;
+    previousWasEncodedWord = true;
+  }
+
+  result += value.slice(lastIndex);
+  return result;
+}
+
+function stripMatchingQuotes(value) {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1);
+  }
+
+  return value;
+}
+
+function decodeHeaderParameter(headerValue, parameterName) {
+  if (!headerValue) {
+    return '';
+  }
+
+  const extendedMatch = headerValue.match(new RegExp(`${parameterName}\\*\\s*=\\s*(\"[^\"]*\"|[^;]+)`, 'i'));
+  if (extendedMatch) {
+    const rawValue = stripMatchingQuotes(extendedMatch[1].trim());
+    const parts = rawValue.match(/^([^']*)'[^']*'(.*)$/);
+
+    if (parts) {
+      return decodeBytes(decodePercentEncodedBytes(parts[2]), parts[1] || 'utf-8');
+    }
+
+    return decodeBytes(decodePercentEncodedBytes(rawValue), 'utf-8');
+  }
+
+  const basicMatch = headerValue.match(new RegExp(`${parameterName}\\s*=\\s*(\"[^\"]*\"|[^;]+)`, 'i'));
+  if (!basicMatch) {
+    return '';
+  }
+
+  return decodeHeaderValue(stripMatchingQuotes(basicMatch[1].trim()));
+}
+
+function extractAttachmentFilename(headers) {
+  return (
+    decodeHeaderParameter(headers['content-disposition'], 'filename')
+    || decodeHeaderParameter(headers['content-type'], 'name')
+    || 'attachment'
+  );
+}
+
+function parseMailboxHeader(value, fallbackAddress = '') {
+  const decoded = decodeHeaderValue(value || '').trim();
+  const addressMatch = decoded.match(/<([^<>@\s]+@[^<>@\s]+)>/)
+    || decoded.match(/([^\s<>]+@[^\s<>]+)/);
+  const address = addressMatch ? (addressMatch[1] || addressMatch[0]) : (fallbackAddress || '');
+  let name = '';
+
+  if (addressMatch) {
+    name = decoded
+      .replace(addressMatch[0], '')
+      .replace(/[<>"]/g, '')
+      .trim();
+  } else if (decoded && decoded !== address) {
+    name = decoded;
+  }
+
+  return { name, address };
+}
+
+async function readRawEmail(rawSource) {
+  if (typeof rawSource === 'string') {
+    return rawSource;
+  }
+
+  const buffer = await new Response(rawSource).arrayBuffer();
+  return bytesToByteString(new Uint8Array(buffer));
+}
+
 function decodeQP(str, charset = 'utf-8') {
   const decoded = str
     .replace(/=\r\n/g, '')
@@ -203,6 +507,57 @@ function decodeContent(content, encoding, charset = 'utf-8') {
 }
 
 // 解析邮件头
+function decodeQPBytes(str, charset = 'utf-8') {
+  const bytes = [];
+
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '=') {
+      if (str[i + 1] === '\r' && str[i + 2] === '\n') {
+        i += 2;
+        continue;
+      }
+
+      if (str[i + 1] === '\n') {
+        i += 1;
+        continue;
+      }
+
+      if (/^[0-9A-F]{2}$/i.test(str.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(str.slice(i + 1, i + 3), 16));
+        i += 2;
+        continue;
+      }
+    }
+
+    bytes.push(str.charCodeAt(i) & 0xFF);
+  }
+
+  return decodeBytes(new Uint8Array(bytes), charset);
+}
+
+function decodeBase64Bytes(str, charset = 'utf-8') {
+  try {
+    return decodeBytes(byteStringToBytes(atob(str.replace(/\s/g, ''))), charset);
+  } catch {
+    return str;
+  }
+}
+
+function decodeContentPreservingBytes(content, encoding, charset = 'utf-8') {
+  if (!content) return '';
+
+  const enc = (encoding || '').toLowerCase();
+  if (enc === 'base64') {
+    return decodeBase64Bytes(content.replace(/\s/g, ''), charset);
+  }
+
+  if (enc === 'quoted-printable') {
+    return decodeQPBytes(content, charset);
+  }
+
+  return decodeBytes(byteStringToBytes(content), charset);
+}
+
 function parseHeaders(headerStr) {
   const headers = {};
   const lines = headerStr.split(/\r?\n/);
@@ -232,9 +587,11 @@ function parseContentType(ct) {
   let boundary = null;
   
   for (const part of parts.slice(1)) {
-    if (part.startsWith('charset=')) {
-      charset = part.substring(8).replace(/"/g, '');
-    } else if (part.startsWith('boundary=')) {
+    const lowerPart = part.toLowerCase();
+
+    if (lowerPart.startsWith('charset=')) {
+      charset = normalizeCharset(part.substring(8).replace(/"/g, ''));
+    } else if (lowerPart.startsWith('boundary=')) {
       boundary = part.substring(9).replace(/"/g, '');
     }
   }
@@ -279,9 +636,9 @@ function parseEmailContent(rawEmail) {
       if (!part) continue;
       
       if (part.contentType.type === 'text/plain' && !text) {
-        text = decodeContent(part.content, part.encoding, part.contentType.charset);
+        text = decodeContentPreservingBytes(part.content, part.encoding, part.contentType.charset);
       } else if (part.contentType.type === 'text/html' && !html) {
-        html = decodeContent(part.content, part.encoding, part.contentType.charset);
+        html = decodeContentPreservingBytes(part.content, part.encoding, part.contentType.charset);
       } else if (part.contentType.type.startsWith('multipart/') && part.contentType.boundary) {
         // 嵌套 multipart
         const nested = parseEmailContent(partStr);
@@ -290,9 +647,7 @@ function parseEmailContent(rawEmail) {
         attachments.push(...nested.attachments);
       } else if (!part.contentType.type.startsWith('text/')) {
         // 附件
-        const filename = part.headers['content-disposition']?.match(/filename="?([^";\n]+)"?/i)?.[1] 
-          || part.headers['content-type']?.match(/name="?([^";\n]+)"?/i)?.[1]
-          || 'attachment';
+        const filename = extractAttachmentFilename(part.headers);
         attachments.push({
           filename,
           contentType: part.contentType.type,
@@ -303,15 +658,15 @@ function parseEmailContent(rawEmail) {
     }
   } else if (mainCT.type === 'text/plain') {
     const encoding = mainHeaders['content-transfer-encoding'] || '7bit';
-    text = decodeContent(bodyStr, encoding, mainCT.charset);
+    text = decodeContentPreservingBytes(bodyStr, encoding, mainCT.charset);
   } else if (mainCT.type === 'text/html') {
     const encoding = mainHeaders['content-transfer-encoding'] || '7bit';
-    html = decodeContent(bodyStr, encoding, mainCT.charset);
+    html = decodeContentPreservingBytes(bodyStr, encoding, mainCT.charset);
   } else {
     text = bodyStr;
   }
   
-  return { text, html, attachments };
+  return { text, html, attachments, headers: mainHeaders };
 }
 
 function json(data, status = 200) {
@@ -611,9 +966,9 @@ async function getMessages(request, env) {
     'hydra:member': results.map(m => ({
       id: m.id,
       msgid: m.msgid,
-      from: { name: m.from_name, address: m.from_address },
+      from: { name: decodeHeaderValue(m.from_name), address: m.from_address },
       to: [{ name: '', address: m.to_address }],
-      subject: m.subject,
+      subject: decodeHeaderValue(m.subject),
       seen: !!m.seen,
       hasAttachments: !!m.has_attachments,
       size: m.size,
@@ -648,9 +1003,9 @@ async function getMessage(request, env, id) {
   return json({
     id: msg.id,
     msgid: msg.msgid,
-    from: { name: msg.from_name, address: msg.from_address },
+    from: { name: decodeHeaderValue(msg.from_name), address: msg.from_address },
     to: [{ name: '', address: msg.to_address }],
-    subject: msg.subject,
+    subject: decodeHeaderValue(msg.subject),
     text: msg.text,
     html: msg.html ? [msg.html] : [],
     seen: !!msg.seen,
@@ -658,7 +1013,7 @@ async function getMessage(request, env, id) {
     size: msg.size,
     attachments: attachments.map(a => ({
       id: a.id,
-      filename: a.filename,
+      filename: decodeHeaderValue(a.filename),
       contentType: a.content_type,
       size: a.size,
     })),
@@ -1170,16 +1525,18 @@ async function handleRequest(request, env) {
 export default {
   async fetch(request, env, ctx) {
     // 自动初始化数据库
-    await initDatabase(env);
+    await ensureDatabaseSchema(env);
     return handleRequest(request, env);
   },
 
   async scheduled(event, env, ctx) {
+    await ensureDatabaseSchema(env);
     await cleanupExpired(env);
   },
 
   // Email 接收处理
   async email(message, env, ctx) {
+    await ensureDatabaseSchema(env);
     const to = message.to;
     const [username, domain] = to.split('@');
 
@@ -1196,7 +1553,7 @@ export default {
     const account = results[0];
 
     // 读取邮件内容
-    const rawEmail = await new Response(message.raw).text();
+    const rawEmail = await readRawEmail(message.raw);
 
     // 解析发件人
     let from = message.from || '';
@@ -1210,6 +1567,9 @@ export default {
 
     // 使用新的解析器
     const parsed = parseEmailContent(rawEmail);
+    const fromHeader = parsed.headers?.from || message.headers?.get('from') || message.from || '';
+    ({ name: fromName, address: fromAddress } = parseMailboxHeader(fromHeader, message.from || ''));
+    const subject = decodeHeaderValue(parsed.headers?.subject || message.headers?.get('subject') || '') || '(No Subject)';
     const textContent = parsed.text;
     const htmlContent = parsed.html;
     const hasAttachments = parsed.attachments.length > 0;
@@ -1219,7 +1579,7 @@ export default {
     await env.DB.prepare(
       `INSERT INTO messages (id, account_id, from_name, from_address, to_address, subject, text, html, has_attachments, size, raw_source, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-    ).bind(id, account.id, fromName, fromAddress, to, message.headers.get('subject') || '(No Subject)', textContent, htmlContent || null, hasAttachments ? 1 : 0, rawEmail.length, rawEmail).run();
+    ).bind(id, account.id, fromName, fromAddress, to, subject, textContent, htmlContent || null, hasAttachments ? 1 : 0, rawEmail.length, rawEmail).run();
 
     // 存储附件
     for (const att of parsed.attachments) {

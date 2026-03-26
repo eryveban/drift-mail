@@ -7,7 +7,7 @@ import { api } from '@/services/api'
 import {
   Mail, RefreshCw, Clock, Copy, Trash2, Plus, LogOut, 
   Timer, Inbox, Paperclip, Download, X, ChevronRight,
-  Sparkles, Shield, Zap
+  Sparkles, Shield, Zap, FileText
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -23,6 +23,8 @@ const customUsername = ref('')
 const timerTick = ref(0)
 const showDomainDropdown = ref(false)
 const mailIframe = ref(null)
+const showDeleteConfirm = ref(false)
+const deletingAccount = ref(false)
 
 // 计算属性
 const formattedTime = computed(() => {
@@ -35,6 +37,12 @@ const formattedTime = computed(() => {
   const secs = Math.floor((diff % 60000) / 1000)
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 })
+
+const deleteAccountPreview = computed(() => (
+  mailStore.email || (customUsername.value && selectedDomain.value
+    ? `${customUsername.value}@${selectedDomain.value}`
+    : '当前邮箱')
+))
 
 // 监听邮箱变化，更新输入框和域名选择
 watch(() => mailStore.email, (email) => {
@@ -78,12 +86,17 @@ watch(showMail, async (mail) => {
   }
 })
 
+watch(showDeleteConfirm, (visible) => {
+  document.body.style.overflow = visible ? 'hidden' : ''
+})
+
 // 初始化
 onMounted(async () => {
   await loadDomains()
   
   // 点击外部关闭下拉菜单
   document.addEventListener('click', handleClickOutside)
+  document.addEventListener('keydown', handleGlobalKeydown)
   
   if (mailStore.isAuthenticated && !mailStore.isExpired) {
     startTimer()
@@ -96,12 +109,20 @@ onUnmounted(() => {
   stopTimer()
   stopAutoRefresh()
   document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('keydown', handleGlobalKeydown)
+  document.body.style.overflow = ''
 })
 
 function handleClickOutside(e) {
   const dropdown = document.querySelector('.domain-dropdown')
   if (dropdown && !dropdown.contains(e.target)) {
     showDomainDropdown.value = false
+  }
+}
+
+function handleGlobalKeydown(e) {
+  if (e.key === 'Escape' && showDeleteConfirm.value && !deletingAccount.value) {
+    closeDeleteConfirm()
   }
 }
 
@@ -207,12 +228,23 @@ async function deleteMail() {
   }
 }
 
-async function deleteAccount() {
-  if (!mailStore.email) return
-  if (!confirm('确定要删除这个邮箱吗？')) return
-  
+function requestDeleteAccount() {
+  if (!mailStore.email || !mailStore.emailId || !mailStore.token || deletingAccount.value) return
+  showDeleteConfirm.value = true
+}
+
+function closeDeleteConfirm() {
+  if (deletingAccount.value) return
+  showDeleteConfirm.value = false
+}
+
+async function confirmDeleteAccount() {
+  if (!mailStore.emailId || !mailStore.token || deletingAccount.value) return
+
+  deletingAccount.value = true
   try {
     await api.deleteAccount(mailStore.emailId, mailStore.token)
+    showDeleteConfirm.value = false
     mailStore.clearSession()
     mailStore.setMails([])
     customUsername.value = ''
@@ -222,6 +254,8 @@ async function deleteAccount() {
     toast.success('邮箱已删除')
   } catch (e) {
     toast.error('删除失败')
+  } finally {
+    deletingAccount.value = false
   }
 }
 
@@ -250,6 +284,8 @@ async function copyEmail() {
 }
 
 function logout() {
+  showDeleteConfirm.value = false
+  deletingAccount.value = false
   mailStore.clearSession()
   mailStore.setMails([])
   customUsername.value = ''
@@ -257,6 +293,10 @@ function logout() {
   stopAutoRefresh()
   sessionStorage.removeItem('auth')
   router.push('/login')
+}
+
+function openDocs() {
+  router.push('/docs')
 }
 
 function startTimer() {
@@ -342,6 +382,10 @@ function getInitial(name) {
             <Sparkles class="w-4 h-4" />
             <span class="hidden sm:inline">延长</span>
           </button>
+          <button @click="openDocs" class="btn-ghost btn-sm">
+            <FileText class="w-4 h-4" />
+            <span class="hidden sm:inline">API 文档</span>
+          </button>
           <button @click="logout" class="btn-ghost btn-icon btn-sm">
             <LogOut class="w-4 h-4" />
           </button>
@@ -409,7 +453,7 @@ function getInitial(name) {
               <Plus class="w-4 h-4" />
               <span>新建邮箱</span>
             </button>
-            <button @click="deleteAccount" class="btn-danger btn-sm">
+            <button @click="requestDeleteAccount" class="btn-danger btn-sm">
               <Trash2 class="w-4 h-4" />
               <span>删除邮箱</span>
             </button>
@@ -565,6 +609,93 @@ function getInitial(name) {
         </div>
       </div>
     </main>
+
+    <Teleport to="body">
+      <Transition name="modal">
+        <div
+          v-if="showDeleteConfirm"
+          class="fixed inset-0 z-[80] flex items-center justify-center px-4 py-6 sm:px-6"
+          @click.self="closeDeleteConfirm"
+        >
+          <div class="absolute inset-0 bg-dark-950/84 backdrop-blur-md" />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-account-title"
+            class="delete-dialog relative w-full max-w-md overflow-hidden rounded-[28px] border border-white/10 bg-dark-900/95 p-6 shadow-[0_32px_90px_rgba(2,6,23,0.6)]"
+          >
+            <div class="delete-dialog-glow" />
+            <button
+              type="button"
+              class="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-dark-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="deletingAccount"
+              @click="closeDeleteConfirm"
+            >
+              <X class="h-4 w-4" />
+            </button>
+
+            <div class="relative">
+              <div class="flex items-start gap-4">
+                <div class="delete-dialog-icon flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-[20px] border border-rose-400/20 bg-gradient-to-br from-rose-500/25 via-rose-500/10 to-orange-400/15 text-rose-200">
+                  <Trash2 class="h-6 w-6" />
+                </div>
+                <div class="min-w-0 pt-1">
+                  <p class="text-[11px] font-medium uppercase tracking-[0.32em] text-rose-300/75">Danger Zone</p>
+                  <h3 id="delete-account-title" class="mt-2 text-xl font-semibold text-white">删除当前邮箱</h3>
+                  <p class="mt-2 text-sm leading-6 text-dark-300">
+                    删除后会立即清空当前邮箱和已接收邮件，且无法恢复。
+                  </p>
+                </div>
+              </div>
+
+              <div class="mt-5 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4">
+                <div class="text-[11px] uppercase tracking-[0.28em] text-dark-500">当前地址</div>
+                <div class="mt-3 flex items-center gap-3">
+                  <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-white/[0.05] text-primary-300">
+                    <Mail class="h-4 w-4" />
+                  </div>
+                  <div class="min-w-0">
+                    <div class="truncate text-sm font-medium text-white">{{ deleteAccountPreview }}</div>
+                    <div class="mt-1 text-xs text-dark-400">删除后需重新创建邮箱才能继续接收邮件。</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-4 rounded-2xl border border-rose-500/15 bg-rose-500/6 px-4 py-3">
+                <div class="flex items-center gap-2 text-sm text-rose-100/90">
+                  <span class="h-1.5 w-1.5 rounded-full bg-rose-300" />
+                  <span>邮箱地址和收件内容会一起删除</span>
+                </div>
+                <div class="mt-2 flex items-center gap-2 text-sm text-amber-100/85">
+                  <span class="h-1.5 w-1.5 rounded-full bg-amber-300" />
+                  <span>这是不可撤销操作，请确认后再继续</span>
+                </div>
+              </div>
+
+              <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  class="btn-ghost btn-sm sm:min-w-[112px] disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="deletingAccount"
+                  @click="closeDeleteConfirm"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="btn-danger btn-sm sm:min-w-[148px] disabled:cursor-wait disabled:opacity-60"
+                  :disabled="deletingAccount"
+                  @click="confirmDeleteAccount"
+                >
+                  <Trash2 class="w-4 h-4" />
+                  <span>{{ deletingAccount ? '正在删除...' : '确认删除' }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
     
     <!-- 底部 -->
     <footer class="border-t border-white/5 py-3">
@@ -585,5 +716,54 @@ function getInitial(name) {
 .dropdown-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.24s ease;
+}
+
+.modal-enter-active .delete-dialog,
+.modal-leave-active .delete-dialog {
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-enter-from .delete-dialog,
+.modal-leave-to .delete-dialog {
+  opacity: 0;
+  transform: translateY(20px) scale(0.96);
+}
+
+.delete-dialog {
+  backdrop-filter: blur(28px);
+}
+
+.delete-dialog::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 27px;
+  background: linear-gradient(145deg, rgba(244, 63, 94, 0.12), rgba(255, 255, 255, 0.03) 42%, rgba(59, 130, 246, 0.06));
+  pointer-events: none;
+}
+
+.delete-dialog-glow {
+  position: absolute;
+  top: -72px;
+  right: -48px;
+  width: 180px;
+  height: 180px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(244, 63, 94, 0.36), rgba(244, 63, 94, 0));
+  pointer-events: none;
+}
+
+.delete-dialog-icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 18px 40px rgba(244, 63, 94, 0.18);
 }
 </style>
