@@ -454,6 +454,140 @@ Content-Disposition: attachment; filename="<文件名>"
 
 ---
 
+## 项目接入示例
+
+如果你要在自己的项目里接入 DriftMail，最少只需要准备下面两个配置：
+
+- **Base URL**: `https://your-domain.workers.dev`
+- **ACCESS_KEY**: 用于创建临时邮箱，请在请求头中写入 `X-Access-Key`
+
+创建临时邮箱成功后，接口会返回当前邮箱自己的 `token`。后续获取该邮箱的邮件列表、邮件正文和附件时，使用 `Authorization: Bearer <token>` 即可。
+
+> 建议把 `ACCESS_KEY` 放在你自己的服务端环境变量里，不要直接暴露给浏览器前端。
+
+### Node.js 最小客户端封装
+
+```js
+const config = {
+  baseUrl: process.env.DRIFTMAIL_BASE_URL,
+  accessKey: process.env.DRIFTMAIL_ACCESS_KEY,
+};
+
+async function request(path, options = {}, token) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  } else {
+    headers['X-Access-Key'] = config.accessKey;
+  }
+
+  const response = await fetch(`${config.baseUrl}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 204) return null;
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || `HTTP ${response.status}`);
+  }
+
+  return data;
+}
+
+export async function createTemporaryMailbox(domain) {
+  const body = domain ? { domain } : {};
+  return request('/api/generate', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listMessages(token, page = 1) {
+  return request(`/api/messages?page=${page}`, {}, token);
+}
+
+export async function getMessage(token, messageId) {
+  return request(`/api/messages/${messageId}`, {}, token);
+}
+```
+
+### 批量创建 N 个邮箱并读取内容
+
+```js
+import { createTemporaryMailbox, listMessages, getMessage } from './driftmail-client.js';
+
+async function createMailboxes(count) {
+  return Promise.all(
+    Array.from({ length: count }, () => createTemporaryMailbox())
+  );
+}
+
+async function collectMailboxContent(mailboxes) {
+  const result = [];
+
+  for (const mailbox of mailboxes) {
+    const messageList = await listMessages(mailbox.token);
+    const details = await Promise.all(
+      (messageList['hydra:member'] || []).map((message) =>
+        getMessage(mailbox.token, message.id)
+      )
+    );
+
+    result.push({
+      id: mailbox.id,
+      address: mailbox.address,
+      token: mailbox.token,
+      messages: details,
+    });
+  }
+
+  return result;
+}
+
+const mailboxes = await createMailboxes(3);
+const inboxSnapshot = await collectMailboxContent(mailboxes);
+
+console.log(inboxSnapshot);
+```
+
+### 轮询等待新邮件
+
+```js
+import { createTemporaryMailbox, listMessages, getMessage } from './driftmail-client.js';
+
+async function waitForFirstMessage(token, options = {}) {
+  const intervalMs = options.intervalMs ?? 5000;
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const data = await listMessages(token);
+    const firstMessage = data['hydra:member']?.[0];
+
+    if (firstMessage) {
+      return getMessage(token, firstMessage.id);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error('Timed out waiting for incoming email');
+}
+
+const mailbox = await createTemporaryMailbox();
+const message = await waitForFirstMessage(mailbox.token);
+
+console.log(mailbox.address, message.subject);
+```
+
+---
+
 ## 使用示例
 
 ### 创建随机邮箱

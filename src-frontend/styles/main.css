@@ -205,4 +205,188 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+
+  .api-doc-nav-link {
+    @apply block rounded-xl px-3 py-2 text-sm text-dark-300 transition-all duration-200;
+    @apply hover:bg-white/5 hover:text-dark-100;
+  }
+
+  .api-doc-nav-link-sub {
+    @apply pl-6 text-dark-500;
+  }
+
+  .api-doc-stat {
+    @apply inline-flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3;
+    @apply min-w-[180px];
+  }
+
+  .api-doc-stat-label {
+    @apply text-[11px] uppercase tracking-[0.2em] text-dark-500 mb-1;
+  }
+
+  .api-doc-stat-value {
+    @apply text-sm font-medium text-dark-100;
+  }
+}
+
+.api-doc-content {
+  color: #d5d7e0;
+}
+
+.api-doc-content h1,
+.api-doc-content h2,
+.api-doc-content h3 {
+  scroll-margin-top: 5rem;
+  letter-spacing: -0.02em;
+}
+
+.api-doc-content h1 {
+  font-size: 2rem;
+  line-height: 1.1;
+  font-weight: 700;
+  color: #f8fafc;
+  margin-bottom: 1rem;
+}
+
+.api-doc-content h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #f8fafc;
+  margin-top: 2.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.api-doc-content h3 {
+  font-size: 1rem;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #c4b5fd;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.api-doc-content p,
+.api-doc-content ul,
+.api-doc-content .api-doc-table-wrap,
+.api-doc-content .api-doc-code-block,
+.api-doc-content .api-doc-divider {
+  margin-bottom: 1rem;
+}
+
+.api-doc-content .api-doc-paragraph {
+  line-height: 1.8;
+  color: #cbd5e1;
+}
+
+.api-doc-content .api-doc-list {
+  list-style: none;
+  display: grid;
+  gap: 0.625rem;
+  padding-left: 0;
+}
+
+.api-doc-content .api-doc-list li {
+  position: relative;
+  padding-left: 1.1rem;
+  line-height: 1.8;
+  color: #cbd5e1;
+}
+
+.api-doc-content .api-doc-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.72rem;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #8b5cf6, #14b8a6);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.35);
+}
+
+.api-doc-content strong {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.api-doc-content .api-doc-inline-code {
+  display: inline-block;
+  padding: 0.16rem 0.45rem;
+  border-radius: 0.55rem;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  color: #c4b5fd;
+  font-size: 0.92em;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+.api-doc-content .api-doc-link {
+  color: #7dd3fc;
+  text-decoration: none;
+}
+
+.api-doc-content .api-doc-link:hover {
+  color: #bae6fd;
+}
+
+.api-doc-content .api-doc-divider {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+}
+
+.api-doc-content .api-doc-code-block {
+  overflow-x: auto;
+  padding: 1rem 1.15rem;
+  border-radius: 1rem;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.api-doc-content .api-doc-code-block code {
+  color: #e2e8f0;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  white-space: pre;
+}
+
+.api-doc-content .api-doc-table-wrap {
+  overflow-x: auto;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.api-doc-content .api-doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 420px;
+}
+
+.api-doc-content .api-doc-table th,
+.api-doc-content .api-doc-table td {
+  padding: 0.9rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+.api-doc-content .api-doc-table th {
+  color: #f8fafc;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.api-doc-content .api-doc-table td {
+  color: #cbd5e1;
+}
+
+.api-doc-content .api-doc-table tr:last-child td {
+  border-bottom: 0;
 }
